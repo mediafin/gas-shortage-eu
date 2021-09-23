@@ -12,15 +12,15 @@ library(httr)
 
 ```
 
+## Get & Wrangle Data
 
-## Get Data
-
-Ik heb een API-key aangemaakt maar ik gebruik die eigenlijk nergens dus ik weet niet of je die nodig hebt of niet.
+GIE-data: https://agsi.gie.eu/#/api
 API-key: 21318434befcb49923bb06332c0c571a
 
-### EU storage levels
+(Ik heb een API-key aangemaakt maar ik gebruik die eigenlijk nergens dus ik weet niet of je die nodig hebt of niet.)
 
-#### datawrangling
+BP-data: https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy/downloads.html
+
 ```{r}
 
 options(timeout = 1000)
@@ -37,38 +37,6 @@ df_gas_storage_eu <- fromJSON("https://agsi.gie.eu/api/data/eu?") %>%
   mutate(full_avg = mean(full[year != 2021], na.rm =T)) %>% ## calculate avg storage level, exc year 2021
   ungroup()
 
-```
-
-#### plots
-```{r}
-
-## plot eu gas storage graph
-df_gas_storage_eu %>%
-  ggplot(aes(x = plot_date, y = full, group = year, col = as.factor(year))) +
-  geom_line(aes(y = full_avg), col = "black", linetype = "11") +
-  geom_line() +
-  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
-  scale_x_date(date_labels = "%b") +
-  labs(x = "", y = "gas in storage (%)", subtitle = "Yearly gas in storage (%) in the EU") +
-  theme(legend.position = "top")
-
-```
-#### export
-```{r}
-
-df_gas_storage_eu %>% 
-  select(plot_date, year, full, full_avg) %>% 
-  spread(year, full) %>% 
-  filter(!is.na(plot_date)) %>%
-  write.csv("export/dw-eu.csv")
-
-```
-
-
-### Country storage levels
-
-#### datawrangling
-```{r}
 ## get available countries
 list_of_countries <- fromJSON("https://agsi.gie.eu/api/eic-listing/SSO/view") %>% 
   distinct(country)
@@ -101,9 +69,44 @@ df_gas_storage <- df_gas_storage %>%
   mutate(full_avg = mean(full[year != 2021], na.rm = T)) %>% 
   ungroup()
 
+df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
+  gather("category","dep_perc", -country_name)
+
+## bind storage and dependency df together
+df_gas_dependency <- df_gas_storage %>% 
+  group_by(country) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>%
+  left_join(df_gas_dependency %>% filter(category == "Natural Gas"), by = c("country_name")) %>% 
+  filter(!is.na(dep_perc))
+
 ```
 
-#### plots
+## EU storage levels
+
+In 2021 staat de voorraad van gas op een lager niveau dan voorgaande jaren. Voor de tijd van het jaar is er sinds 2011 nog nooit zo weinig gas in reserve geweest.
+
+```{r}
+
+## plot eu gas storage graph
+df_gas_storage_eu %>%
+  ggplot(aes(x = plot_date, y = full, group = year, col = as.factor(year))) +
+  geom_line(aes(y = full_avg), col = "black", linetype = "11") +
+  geom_line() +
+  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
+  scale_x_date(date_labels = "%b") +
+  labs(x = "", y = "gas in storage (%)", subtitle = "Yearly gas in storage (%) in the EU") +
+  theme(legend.position = "top")
+
+```
+
+## Country storage levels
+
+### evolution
+
+Er zijn verschillen tussen de Europese landen. In België en Frankrijk zijn de gasreserves gevuld naar verwachting en liggen dicht tegen de gemiddelden. Landen als Duitsland en Nederland kampen met een duidelijk lagere opslag dan normaal.
+
+De curves van Italië blijken jaar na jaar heel dicht tegen de gemiddelden te liggen, met zeer weinig afwijking. Hoe komt dit?
+
 ```{r}
 
 ## plotted countries
@@ -121,7 +124,13 @@ df_gas_storage %>%
   theme(legend.position = "top")
 
 ```
-#### additional plots
+
+### current levels
+
+Hoe uitzonderlijk zijn die lage gasreserves? Het grootste verschil doet zich voor in Nederland waar de gasreserves beduidend lager zijn dan normaal. Ook in Duitsland en Oostenrijk is dat te zien.
+
+Opvallend dat ze in het VK op dit moment veel meer gas hebben opgeslagen dan de jaren voordien.
+
 ```{r}
 
 df_gas_storage %>%
@@ -143,8 +152,37 @@ df_gas_storage %>%
 
 ```
 
-#### export
+### gas dependency
+
+Wat betekenen die lage reserves voor de Europese landen? Weer lijkt Nederland een belangrijke uitschieter. Het land is voor bijna 40% van zijn energieconsumptie afhankelijk van gas, waardoor de lage opslag een probleem kan vormen. Andere landen die sterk afhankelijk zijn van gas zoals Italië, het VK en Hongarije, hebben beduidend meer gasopslag. 
+
+Duitsland en Oostenrijk zijn in mindere mate afhankelijk van gas.
+
 ```{r}
+
+## quantiles
+quantile(df_gas_dependency$dep_perc, probs = c(0.25, 0.5, 0.75))
+quantile(df_gas_dependency$full, probs = c(0.25, 0.5, 0.75))
+
+## scatterplot
+df_gas_dependency %>% 
+  ggplot(aes(x = full, y = dep_perc, size = gasInStorage)) +
+  geom_rect(aes(xmin = min(df_gas_dependency$full, na.rm = T), xmax = max(df_gas_dependency$full, na.rm = T), ymin = 0.2242434, ymax = 0.3635822), fill = "grey") +
+  geom_point(col = "red") +
+  geom_hline(yintercept = median(df_gas_dependency$dep_perc)) +
+  geom_vline(xintercept = median(df_gas_dependency$full)) +
+  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 3)
+
+```
+
+## export
+```{r}
+
+df_gas_storage_eu %>% 
+  select(plot_date, year, full, full_avg) %>% 
+  spread(year, full) %>% 
+  filter(!is.na(plot_date)) %>%
+  write.csv("export/dw-eu.csv")
 
 for (i in plot_c) {
   
@@ -155,41 +193,5 @@ for (i in plot_c) {
     write.csv(paste0("export/dw-",i,".csv"))
   
 }
-
-```
-
-### Gas dependency
-
-#### load data from BP
-data source: https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy/downloads.html
-```{r}
-
-df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
-  gather("category","dep_perc", -country_name)
-
-```
-
-#### scatterplot
-```{r}
-
-## bind storage and dependency df together
-df_gas_dependency_plot <- df_gas_storage %>% 
-  group_by(country) %>% 
-  filter(gasDayStartedOn == max(gasDayStartedOn)) %>%
-  left_join(df_gas_dependency %>% filter(category == "Natural Gas"), by = c("country_name")) %>% 
-  filter(!is.na(dep_perc))
-
-## quantiles
-quantile(df_gas_dependency_plot$dep_perc, probs = c(0.25, 0.5, 0.75))
-quantile(df_gas_dependency_plot$full, probs = c(0.25, 0.5, 0.75))
-
-## scatterplot
-df_gas_dependency_plot %>% 
-  ggplot(aes(x = full, y = dep_perc, size = gasInStorage)) +
-  geom_rect(aes(xmin = min(df_gas_dependency_plot$full, na.rm = T), xmax = max(df_gas_dependency_plot$full, na.rm = T), ymin = 0.2242434, ymax = 0.3635822), fill = "grey") +
-  geom_point(col = "red") +
-  geom_hline(yintercept = median(df_gas_dependency_plot$dep_perc)) +
-  geom_vline(xintercept = median(df_gas_dependency_plot$full)) +
-  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 3)
 
 ```
