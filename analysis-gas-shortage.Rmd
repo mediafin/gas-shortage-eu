@@ -1,0 +1,149 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## Libraries
+```{r}
+
+library(tidyverse)
+library(jsonlite)
+library(httr)
+
+```
+
+
+## Get Data
+
+Ik heb een API-key aangemaakt maar ik gebruik die eigenlijk nergens dus ik weet niet of je die nodig hebt of niet.
+API-key: 21318434befcb49923bb06332c0c571a
+
+### EU storage levels
+
+#### datawrangling
+```{r}
+
+options(timeout = 1000)
+
+## api call and datawrangling
+df_gas_storage_eu <- fromJSON("https://agsi.gie.eu/api/data/eu?") %>% 
+  mutate(
+    gasDayStartedOn = as.Date(gasDayStartedOn),
+    year = lubridate::year(gasDayStartedOn),
+    plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d"))),
+    full = as.numeric(full)
+    ) %>% 
+  group_by(plot_date) %>% 
+  mutate(full_avg = mean(full[year != 2021], na.rm =T)) %>% ## calculate avg storage level, exc year 2021
+  ungroup()
+
+```
+
+#### plots
+```{r}
+
+## plot eu gas storage graph
+df_gas_storage_eu %>%
+  ggplot(aes(x = plot_date, y = full, group = year, col = as.factor(year))) +
+  geom_line(aes(y = full_avg), col = "black", linetype = "11") +
+  geom_line() +
+  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
+  labs(x = "", y = "gas in storage (%)", subtitle = "Yearly gas in storage (%) in the EU") +
+  theme(legend.position = "top")
+
+```
+
+### Country storage levels
+
+#### datawrangling
+```{r}
+## get available countries
+list_of_countries <- fromJSON("https://agsi.gie.eu/api/eic-listing/SSO/view") %>% 
+  distinct(country)
+
+df_gas_storage <- data.frame()
+
+## loop over countries and get storage data
+for (i in list_of_countries$country) {
+  
+  print(i)
+  
+  df_gas_storage_temp <- fromJSON(paste0("https://agsi.gie.eu/api/data/",i)) %>% 
+    mutate(country = i)
+  
+  df_gas_storage <- bind_rows(df_gas_storage, df_gas_storage_temp)
+}
+
+## datawrangling
+df_gas_storage <- df_gas_storage %>% 
+  mutate(
+    gasDayStartedOn = as.Date(gasDayStartedOn, "%Y-%m-%d"),
+    full = as.numeric(full),
+    gasInStorage = as.numeric(gasInStorage),
+    year = lubridate::year(gasDayStartedOn),
+    plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d")))
+  )
+
+```
+
+#### plots
+```{r}
+
+## calculate avg lines
+df_avg_storage <- df_gas_storage %>% 
+  group_by(country, plot_date) %>% 
+  summarise(full_avg = mean(full[year != 2021], na.rm = T))
+
+## plotted countries
+plot_c <-c("BE","NL","DE","FR")
+
+## plot
+df_gas_storage %>%
+  filter(country %in% plot_c) %>%
+  ggplot(aes(x = plot_date, y = full)) +
+  geom_line(aes(group = year, col = as.factor(year))) +
+  geom_line(data = subset(df_avg_storage, country %in% plot_c), aes(x = plot_date, y = full_avg), col = "black", linetype = "11") +
+  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
+  facet_wrap(~country) +
+  theme(legend.position = "top")
+
+```
+### Gas dependency
+
+#### load data from BP
+data source: https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy/downloads.html
+```{r}
+
+df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
+  gather("category","dep_perc", -country_name)
+
+```
+
+#### scatterplot
+```{r}
+
+## bind storage and dependency df together
+df_gas_dependency_plot <- df_gas_storage %>% 
+  group_by(country) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  mutate(
+    country_name = countrycode::countrycode(country, origin = 'iso2c', destination = 'country.name'),
+    country_name_nl = countrycode::countrycode(country, origin = 'iso2c', destination = 'cldr.name.nl')
+    ) %>% 
+  left_join(df_gas_dependency %>% filter(category == "Natural Gas"), by = c("country_name")) %>% 
+  filter(!is.na(dep_perc))
+
+## quantiles
+quantile(df_gas_dependency_plot$dep_perc, probs = c(0.25, 0.5, 0.75))
+quantile(df_gas_dependency_plot$full, probs = c(0.25, 0.5, 0.75))
+
+## scatterplot
+df_gas_dependency_plot %>% 
+  ggplot(aes(x = full, y = dep_perc, size = gasInStorage)) +
+  geom_rect(aes(xmin = min(df_gas_dependency_plot$full, na.rm = T), xmax = max(df_gas_dependency_plot$full, na.rm = T), ymin = 0.2242434, ymax = 0.3635822), fill = "grey") +
+  geom_point(col = "red") +
+  geom_hline(yintercept = median(df_gas_dependency_plot$dep_perc)) +
+  geom_vline(xintercept = median(df_gas_dependency_plot$full)) +
+  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 3)
+
+```
