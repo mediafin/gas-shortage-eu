@@ -7,8 +7,12 @@ output: html_notebook
 ```{r}
 
 library(tidyverse)
+library(osmdata)
+
 library(jsonlite)
 library(httr)
+
+library(eurostat)
 
 ```
 
@@ -31,10 +35,14 @@ df_gas_storage_eu <- fromJSON("https://agsi.gie.eu/api/data/eu?") %>%
     gasDayStartedOn = as.Date(gasDayStartedOn),
     year = lubridate::year(gasDayStartedOn),
     plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d"))),
-    full = as.numeric(full)
+    full = as.numeric(full),
+    gasInStorage = as.numeric(gasInStorage)
     ) %>% 
   group_by(plot_date) %>% 
-  mutate(full_avg = mean(full[year != 2021], na.rm =T)) %>% ## calculate avg storage level, exc year 2021
+  mutate(
+    full_avg = mean(full[year != 2021], na.rm =T),
+    gasInStorage_avg = mean(gasInStorage[year != 2021], na.rm =T),
+    ) %>% ## calculate avg storage level, exc year 2021
   ungroup()
 
 ## get available countries
@@ -66,7 +74,10 @@ df_gas_storage <- df_gas_storage %>%
     plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d")))
   ) %>% 
   group_by(country, plot_date) %>% 
-  mutate(full_avg = mean(full[year != 2021], na.rm = T)) %>% 
+    mutate(
+    full_avg = mean(full[year != 2021], na.rm =T),
+    gasInStorage_avg = mean(gasInStorage[year != 2021], na.rm =T),
+    ) %>% ## calculate avg storage level, exc year 2021
   ungroup()
 
 df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
@@ -97,6 +108,12 @@ df_gas_storage_eu %>%
   labs(x = "", y = "gas in storage (%)", subtitle = "Yearly gas in storage (%) in the EU") +
   theme(legend.position = "top")
 
+df_gas_storage_eu %>% 
+  select(plot_date, year, full, full_avg) %>% 
+  spread(year, full) %>%
+  filter(!is.na(plot_date)) %>% 
+  write.csv("export/dw-1.csv", row.names = F)
+
 ```
 
 ## Country storage levels
@@ -113,15 +130,42 @@ De curves van Italië blijken jaar na jaar heel dicht tegen de gemiddelden te li
 plot_c <-c("BE","NL","DE","FR","IT")
 
 ## plot
-df_gas_storage %>%
-  filter(country %in% plot_c) %>%
-  ggplot(aes(x = plot_date, y = full)) +
-  geom_line(aes(group = year, col = as.factor(year))) +
-  geom_line(aes(x = plot_date, y = full_avg), col = "black", linetype = "11") +
+df_plot <- df_gas_storage %>%
+  filter(country %in% plot_c)
+
+df_plot %>%
+  ggplot() +
+    geom_area(data = subset(df_plot, year == 2019),
+            aes(x = plot_date, y = gasInStorage_avg), color = "black", linetype = "11", alpha = 0.4) +
+  geom_line(aes(x = plot_date, y = gasInStorage, group = year, col = as.factor(year))) +
   gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
   scale_x_date(date_labels = "%b") +
-  facet_wrap(~country_name_nl, ncol = 3, scales = "free_x") +
-  theme(legend.position = "top")
+  scale_color_manual(values = c("orange","blue")) +
+  facet_wrap(~country_name_nl, ncol = 3, scales = "free") +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.minor.y = element_blank()
+    )
+
+  # ggplot() +
+  # geom_area(data = subset(df_avg_consumption, geo %in% filter_countries),
+  #           aes(x = plot_date, y = avg_values), col = "black", linetype = "11", alpha = 0.1) +
+  # geom_line(aes(x = plot_date, y = values_gwh, col = as.factor(year)), alpha = 0.6) +
+  # gghighlight::gghighlight(year >= 2020, calculate_per_facet = T, use_direct_label = F) +
+  # scale_x_date(date_labels = "%b") +
+  # facet_wrap(~geo, scales = "free") +
+  # labs(
+  #   x = "", y = "",
+  #   subtitle = "Monthly consumption natural gas, in GWh",
+  #   caption = "Source: Eurostat"
+  # ) +
+  # scale_color_manual(values = c("orange","blue")) +
+  # theme_minimal() +
+  # theme(
+  #   legend.position = "top",
+  #   panel.grid.minor.y = element_blank()
+  #   )
 
 ```
 
@@ -140,17 +184,87 @@ df_gas_storage %>%
   gghighlight::gghighlight(country %in% plot_c, use_direct_label = F) +
   scale_x_date(date_labels = "%b")
 
-df_gas_storage %>%
-  filter(year == 2021 & gasDayStartedOn == max(gasDayStartedOn, na.rm = T)) %>% 
-  mutate(diff = full) %>% 
-  gather("category", "value", full, full_avg) %>% 
-  ggplot(aes(x = reorder(country_name, -diff), y = value, fill = category)) + 
-  geom_col(position = "dodge", width = 0.6) +
-  coord_flip() +
+```
+
+### current situation
+
+```{r}
+
+df_gas_diff <- df_gas_storage %>%
+  filter(year == 2021 & gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0) %>% 
+  mutate(diff = (gasInStorage / gasInStorage_avg - 1)*100)
+
+df_gas_diff %>%
+  ggplot(aes(x=full, y = reorder(country_name_nl, full), xend=full_avg, color=diff>0)) +
+  ggalt::geom_dumbbell(size=2,
+                colour_x = "black", colour_xend = "grey",
+                dot_guide=TRUE, dot_guide_size=0.25) +
+  scale_color_manual(values = c("#EF5350","#90ee02"), breaks = c(FALSE, TRUE)) +
+  labs(x=NULL, y=NULL, subtitle = "Current gas storage levels vs avg 2011-2020") +
+  scale_x_continuous(limits = c(40,100)) +
   theme_minimal() +
-  scale_fill_manual(values = c("#113767", "#9ac9df"), labels = c("2021","avg (2011-2020)"))
+  theme(legend.position = "none")
+
+df_gas_diff %>% 
+  ggplot(aes(x = reorder(country_name_nl, diff), y = diff, fill = diff>0)) +
+  geom_col() +
+  coord_flip()
+
+df_gas_diff %>%
+  select(country_name_nl, full, full_avg, diff) %>% 
+  write.csv("export/dw-2.csv", row.names = F)
 
 ```
+
+
+#### higer
+
+```{r}
+
+df_gas_diff %>%
+  top_n(3, diff) %>%
+  distinct(country_name_nl)
+
+```
+
+
+#### normal
+
+```{r}
+
+df_gas_diff %>%
+  top_n(-3, abs(diff)) %>% 
+  distinct(country_name_nl)
+
+```
+
+
+#### lower
+```{r}
+
+df_gas_diff %>%
+  top_n(-3, diff) %>%
+  distinct(country_name_nl)
+
+```
+
+```{r}
+
+df_gas_diff %>% 
+  ggplot(aes(x = full, y = diff)) +
+  geom_hline(yintercept = 0) +
+  geom_hline(yintercept = 0.1824005, linetype = "11") +
+  geom_hline(yintercept = -0.1824005, linetype = "11") +
+  geom_point(col = "red") +
+  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 2.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Voorraad gevuld (%)",
+    y = "verschil met gem. 2011-2020"
+  )
+
+```
+
 
 ### gas dependency
 
@@ -195,3 +309,440 @@ for (i in plot_c) {
 }
 
 ```
+
+## Origin
+
+### Get data
+
+```{r}
+
+library(eurostat)
+
+df_eurostat_toc <- eurostat::get_eurostat_toc()
+
+df_import_gas_yearly <- get_eurostat("nrg_ti_gas", type = "label")
+df_import_gas <- get_eurostat("nrg_ti_gasm", type = "label")
+glimpse(df_import_gas)
+
+```
+
+```{r}
+
+df_eu_russian_import <- df_import_gas_yearly %>% 
+  filter(unit == "Million cubic metres") %>% 
+  filter(partner %in% c("Total","Russia","Not specified") & siec == "Natural gas") %>% 
+  filter(geo == "European Union - 28 countries (2013-2020)") %>%
+  group_by(siec, geo, time) %>% 
+  summarise(pct = sum(values[partner == "Russia"], na.rm = T)/(sum(values[partner=="Total"], na.rm = T) - sum(values[partner=="Not specified"], na.rm = T)))
+
+df_eu_russian_import %>% 
+  ggplot(aes(x = time, y = pct)) +
+  geom_col(fill = "grey", aes(y = 1)) +
+  geom_col(fill = "blue")
+
+```
+
+```{r}
+
+df_russian_import_by_country <- df_import_gas_yearly %>%
+  filter(unit == "Million cubic metres") %>% 
+  filter(partner %in% c("Total","Russia","Not specified") & siec == "Natural gas") %>% 
+  filter(!(geo %in% c("European Union - 27 countries (from 2020)","Euro area (EA11-1999, EA12-2001, EA13-2007, EA15-2008, EA16-2009, EA17-2011, EA18-2014, EA19-2015)","Euro area - 19 countries  (from 2015)"))) %>%
+  group_by(geo, time) %>% 
+  mutate(values = ifelse(geo == "European Union - 28 countries (2013-2020)" & partner == "Total", 
+                         values - values[partner=="Not specified"], values)) %>% 
+  ungroup() %>% 
+  group_by(siec, geo, time) %>% 
+  summarise(pct = sum(values[partner == "Russia"], na.rm = T)/(sum(values[partner=="Total"], na.rm = T))) %>% 
+  mutate(geo = gsub(" \\(until 1990 former territory of the FRG\\)","",geo))
+
+df_russian_import_by_country %>%
+  filter(time == max(time) & pct > 0) %>%
+  ggplot(aes(x = reorder(geo, pct), y = pct)) +
+  geom_col(fill = "grey", aes(y = 1)) +
+  geom_col(fill = "blue") +
+  coord_flip() +
+  geom_hline(yintercept = seq(0, 1, 0.2), col = "white", alpha = 0.5) +
+  scale_y_continuous(
+    breaks = seq(0, 1, 0.2),
+    labels = scales::percent_format()
+    )
+
+df_russian_import_by_country %>%
+  filter(time == max(time) & pct > 0) %>% 
+  mutate(country_name_nl = countrycode::countrycode(geo, origin = 'country.name', destination = 'cldr.name.nl')) %>% 
+  arrange(-pct) %>% 
+  mutate(pct = pct * 100) %>% 
+  filter(geo %in% df_gas_dependency$country_name | geo == "European Union - 28 countries (2013-2020)") %>% 
+  write.csv("dw-test.csv")
+
+```
+
+```{r}
+
+df_test <-
+df_russian_import_by_country %>%
+  filter(time == max(time) & pct > 0) %>%
+  left_join(df_gas_dependency, by = c("geo"="country_name")) %>% 
+  filter(!is.na(status)) %>% 
+  select(country_name_nl, pct, dep_perc) %>% 
+  mutate(
+    dep_perc = dep_perc * 100,
+    pct = pct * 100
+  )
+
+df_test%>% 
+  write.csv("dw-scatterplot.csv")
+
+df_test %>% 
+  ggplot(aes(x = pct, y = dep_perc)) +
+    geom_point(col = "red") +
+    ggrepel::geom_text_repel(aes(label = geo)) +
+  scale_x_continuous(labels = scales::percent_format()) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "import van Russisch gas",
+    y = "afhankelijkheid van gas"
+  )
+
+```
+
+total import eu in 2020: 24633407 TJ
+total import eu in 2021: 10510252 TJ
+```{r}
+
+df_import_gas %>% 
+  mutate(partner = gsub("Germany \\(until 1990 former territory of the FRG\\)","Germany", partner)) %>%
+  filter(
+    geo %in% c("European Union - 27 countries (from 2020)") & 
+      unit == "Terajoule (gross calorific value - GCV)" & 
+      partner != "Total") %>%
+  mutate(
+    year = lubridate::year(time),
+    partner = ifelse(partner %in% c("Russia","Norway","Germany"), partner, "Andere")
+  ) %>% 
+  group_by(siec, year, partner) %>% 
+  summarise(values = sum(values, na.rm = T)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = year, y = values, fill = partner)) +
+  # geom_col() +
+  geom_col(position = "fill") +
+  facet_wrap(~siec) +
+  labs(
+    subtitle = "import van gas door de EU, per partner"
+  )
+
+```
+
+```{r}
+
+df_plot <- df_import_gas %>%
+  mutate(
+    year = lubridate::year(time),
+    geo = gsub("Germany \\(until 1990 former territory of the FRG\\)","Germany", geo),
+    # partner = ifelse(partner == "Russia", partner, "Andere")
+    ) %>%
+  filter(
+    !(geo %in% c("European Union - 27 countries (from 2020)","Euro area (EA11-1999, EA12-2001, EA13-2007, EA15-2008, EA16-2009, EA17-2011, EA18-2014, EA19-2015)","Euro area - 19 countries  (from 2015)")) & 
+      unit == "Terajoule (gross calorific value - GCV)" & partner %in% c("Total", "Russia")) %>%
+  filter(year == max(year)-1) %>% 
+  group_by(siec, year, geo, partner) %>% 
+  summarise(values = sum(values, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(geo, year, siec) %>% 
+  mutate(
+    values = ifelse(partner == "Total", values - values[partner ==  "Russia"], values)
+  )
+
+df_plot %>%
+  filter(values>0) %>% 
+  ggplot(aes(x = reorder(geo, values), y = values, fill = partner)) +
+  geom_col() +
+  # geom_col(position = "fill") +
+  coord_flip() +
+  facet_wrap(~siec, scales = "free") +
+  labs(
+    subtitle = "import van gas afkomstig van Rusland"
+  )
+
+df_plot %>%
+  filter(values > 0) %>% 
+  group_by(geo) %>% 
+  mutate(totalValues = sum(values, na.rm = T)) %>% 
+  # spread(siec, values) %>%
+  # arrange(-totalValues) %>%
+  # write.csv("dw-test.csv", row.names = F)
+  ggplot(aes(x = reorder(geo, totalValues), y = values, fill = siec)) +
+  geom_col() +
+  # geom_col(position = "fill") +
+  coord_flip() +
+  labs(
+    subtitle = "import van gas afkomstig van Rusland, in Terajoule (gross calorific value - GCV)"
+  )
+
+
+```
+
+```{r}
+
+df_plot <- df_import_gas %>% 
+  filter(geo %in% c("European Union - 27 countries (from 2020)","Belgium","Netherlands") & unit == "Terajoule (gross calorific value - GCV)" & partner != "Total") %>%
+  mutate(
+    year = lubridate::year(time)
+  ) %>%
+  group_by(year, geo, partner, siec) %>% 
+  summarise(values = sum(values, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(year, geo, siec) %>% 
+  mutate(
+    value_perc = values / sum(values)
+    ) %>% 
+  arrange(-values)
+
+df_plot %>%
+  ggplot(aes(x = year, y = value_perc, fill = partner)) +
+  geom_col() +
+  gghighlight::gghighlight(partner %in% c("Ukraine","Qatar","Russia","Norway","Germany (until 1990 former territory of the FRG)"), calculate_per_facet = T) +
+  facet_grid(geo~siec, scales = "free_x") +
+  theme(legend.position = "top") +
+  NULL
+
+df_plot%>%
+  ggplot(aes(x = year, y = value_perc, col = partner)) +
+  geom_line() +
+  geom_point() +
+  gghighlight::gghighlight(partner %in% c("Ukraine","Qatar","Russia","Norway","Germany (until 1990 former territory of the FRG)"), calculate_per_facet = T, use_direct_label = F) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  facet_grid(geo~siec, scales = "free_x") +
+  theme(legend.position = "top") +
+  NULL
+
+```
+
+```{r}
+
+library(ggalluvial)
+
+df_alluvial <- df_import_gas %>% 
+  filter(unit == "Terajoule (gross calorific value - GCV)" & partner != "Total") %>%
+  mutate(
+    year = lubridate::year(time)
+  ) %>%
+  group_by(year, geo, partner, siec) %>% 
+  summarise(values = sum(values, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(year, geo, siec) %>% 
+  mutate(
+    value_perc = values / sum(values)
+    ) %>% 
+  ungroup() %>% 
+  arrange(-values)%>%
+  filter(year == 2020 & siec == "Liquefied natural gas" & geo %in% c("Belgium","Netherlands","France","United Kingdom","Germany (until 1990 former territory of the FRG)"))
+
+top_partners <- df_alluvial %>% group_by(partner) %>% summarise(total = sum(values, na.rm = T)) %>% top_n(5, total)
+
+df_alluvial <- df_alluvial %>% 
+  mutate(partner = ifelse(partner %in% top_partners$partner, partner, "other")) %>% 
+  group_by(partner, geo, siec, year) %>% 
+  summarise(
+    values = sum(values)
+  )
+
+ggplot(df_alluvial,
+       aes(y = values, axis1 = partner, axis2 = geo)) +
+  geom_alluvium(aes(fill = partner, color = partner),
+                width = 1/12, knot.pos = 0.4) +
+  geom_stratum(width = 1/6, color = "grey") +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum)), size = 2) +
+  theme(legend.position = "none")
+
+```
+## CONSUMPTION
+
+### get data
+```{r}
+
+# df_eurostat_toc
+df_monthly_consumption <- get_eurostat("nrg_cb_gasm", type = "label") %>%
+  mutate(
+    geo = gsub("Germany \\(until 1990 former territory of the FRG\\)","Germany", geo),
+    plot_date = lubridate::ymd(paste0("2021-",format(time, "%m-%d"))),
+    year = lubridate::year(time)
+    ) %>%
+  filter(nrg_bal == "Inland consumption - observed") %>%
+  filter(unit == "Terajoule (gross calorific value - GCV)") %>% 
+  rename(values_tj = values) %>% 
+  select(-unit) %>% 
+  mutate(values_gwh = values_tj / 3.6)
+
+glimpse(df_monthly_consumption)
+
+```
+
+### yearly consumption BE
+```{r}
+
+df_monthly_consumption %>%
+  group_by(geo, year) %>% 
+  filter(geo == "Belgium") %>%
+  summarise(totalConsumptionGWh = sum(values_gwh))
+
+```
+
+### average consumption
+```{r}
+
+df_avg_consumption <- df_monthly_consumption %>%
+  group_by(geo, plot_date) %>%
+  summarise(avg_values = mean(values_gwh[year != 2021], na.rm = TRUE)) %>% 
+  ungroup()
+
+df_avg_consumption %>%
+  filter(geo %in% c("Belgium","France","Netherlands","Germany","European Union - 27 countries (from 2020)")) %>%
+  ggplot(aes(x = plot_date, y = avg_values)) +
+  geom_area(alpha = 0.2) +
+  geom_line(linetype = "11") +
+  scale_x_date(date_labels = "%b") +
+  facet_wrap(~geo, scales = "free") +
+  labs(
+    x = "", y = "",
+    subtitle = "Monthly consumption natural gas, in GWh",
+    caption = "Source: Eurostat"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+```{r}
+eu_values <- df_gas_storage_eu %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  select(gasInStorage, full) %>% 
+  mutate(
+    gasInStorage = as.numeric(gasInStorage),
+    geo = "European Union - 27 countries (from 2020)",
+    country_name_nl = "Europese Unie"
+    )
+
+current_storage_values <- df_gas_storage %>% 
+  group_by(geo = country_name, country_name_nl) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  ungroup() %>% 
+  select(geo, country_name_nl, gasInStorage, full) %>% 
+  # bind_rows(eu_values) %>% 
+  filter(!is.na(full))
+
+winter_consumption <-  df_avg_consumption %>% 
+  filter(plot_date == "2021-01-01" | plot_date >= "2021-11-01") %>% 
+  group_by(geo) %>% 
+  summarise(winterConsumptionGWh = sum(avg_values)) %>% 
+  mutate(dailyWinterConsumptionGWh = winterConsumptionGWh/(92)) %>%  # 92 days in nov, dec and jan
+  inner_join(current_storage_values, by = "geo") %>% 
+  mutate(
+    consumptionDays = gasInStorage * 1000 / dailyWinterConsumptionGWh
+  )
+```
+
+
+```{r}
+
+winter_consumption %>% 
+  ggplot(aes(x = reorder(country_name_nl, consumptionDays), y = consumptionDays)) +
+  geom_col() +
+  geom_text(aes(label = round(consumptionDays, 0)), hjust = 1.1, size = 3, col = "white") +
+  coord_flip() +
+  labs(
+    x = NULL, y = NULL,
+    subtitle = "Hoeveel winterdagen kan elk land \nmet zijn huidige voorraden consumeren?"
+  )
+
+winter_consumption %>% 
+  write.csv("export/dw-3.csv", row.names = F)
+
+winter_consumption %>% 
+  mutate(
+    gasInStorage = gasInStorage * 1000,
+    `/` = "/",
+    `=` = "="
+    ) %>% 
+  select(LAND = country_name_nl, `RESERVE (GWh)` = gasInStorage,`/`, `GEM. VERBRUIK WINTERDAG (GWh)` = dailyWinterConsumptionGWh,`=`,`AANTAL DAGEN`=consumptionDays) %>% 
+  write.csv("export/table.csv", row.names = F)
+
+```
+
+```{r}
+
+winter_consumption %>% 
+  ggplot(aes(x = full, y = consumptionDays)) +
+  geom_smooth(method = "lm", se = F, col = "blue", size = 0.4) +
+  geom_point(col = "red") +
+  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 2.5) +
+  ylim(0,200)
+
+```
+
+
+### trends
+
+#### EU
+```{r}
+
+filter_countries <- c("European Union - 27 countries (from 2020)")
+
+df_monthly_consumption %>%
+  filter(geo %in% filter_countries) %>%
+  ggplot() +
+  geom_area(data = subset(df_avg_consumption, geo %in% filter_countries),
+            aes(x = plot_date, y = avg_values/1000), col = "black", linetype = "11", alpha = 0.1) +
+  geom_line(aes(x = plot_date, y = values_gwh/1000, col = as.factor(year)), alpha = 0.6, size = 0.8) +
+  gghighlight::gghighlight(year >= 2020, use_direct_label = F) +
+  scale_x_date(date_labels = "%b") +
+  facet_wrap(~geo, scales = "free") +
+  labs(
+    x = "", y = "",
+    subtitle = "Monthly consumption natural gas, in TWh",
+    caption = "Source: Eurostat"
+  ) +
+  scale_color_manual(values = c("orange","blue")) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+        panel.grid.minor.y = element_blank()
+    )
+
+```
+
+#### member states
+```{r}
+
+filter_countries <- c("Belgium","France","Netherlands","Germany","Italy","Spain")
+
+df_monthly_consumption %>%
+  filter(geo %in% filter_countries) %>%
+  ggplot() +
+  geom_area(data = subset(df_avg_consumption, geo %in% filter_countries),
+            aes(x = plot_date, y = avg_values), col = "black", linetype = "11", alpha = 0.1) +
+  geom_line(aes(x = plot_date, y = values_gwh, col = as.factor(year)), alpha = 0.6) +
+  gghighlight::gghighlight(year >= 2020, calculate_per_facet = T, use_direct_label = F) +
+  scale_x_date(date_labels = "%b") +
+  facet_wrap(~geo, scales = "free") +
+  labs(
+    x = "", y = "",
+    subtitle = "Monthly consumption natural gas, in GWh",
+    caption = "Source: Eurostat"
+  ) +
+  scale_color_manual(values = c("orange","blue")) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.minor.y = element_blank()
+    )
+
+```
+
+## import - export = netto
+netto - voorraad
+```{r}
+
+```
+
