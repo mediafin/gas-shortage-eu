@@ -92,21 +92,61 @@ df_gas_dependency <- df_gas_storage %>%
 
 ```
 
+## Subsets
+```{r}
+
+df_gas_diff <- df_gas_storage %>%
+  filter(year == 2021 & gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0) %>% 
+  mutate(diff = full - full_avg)
+
+```
+
 ## EU storage levels
+
+### Baseplots
+```{r}
+
+basePlot <- ggplot() +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "#FFDF00"),
+    legend.position = "none",
+    panel.grid = element_line(colour = "#a7a5a6", size = 0.1),
+    panel.grid.minor.y = element_blank(),
+    panel.ontop = TRUE
+    )
+
+baseLinePlot <- basePlot +
+  labs(x = NULL, y = NULL, subtitle = "Yearly gas in storage (%) in the EU") +
+  scale_colour_manual(values = c("#a7a5a6","black")) +
+  scale_size_manual(values = c(0.2, 1)) +
+  scale_x_date(date_labels = "%b", expand = c(0,0)) +
+  scale_y_continuous(breaks = seq(0, 100, 25), limits = c(0,100), position = "right", expand = c(0,0))
+
+```
+
 
 In 2021 staat de voorraad van gas op een lager niveau dan voorgaande jaren. Voor de tijd van het jaar is er sinds 2011 nog nooit zo weinig gas in reserve geweest.
 
 ```{r}
 
 ## plot eu gas storage graph
-df_gas_storage_eu %>%
-  ggplot(aes(x = plot_date, y = full, group = year, col = as.factor(year))) +
-  geom_line(aes(y = full_avg), col = "black", linetype = "11") +
-  geom_line() +
-  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
-  scale_x_date(date_labels = "%b") +
-  labs(x = "", y = "gas in storage (%)", subtitle = "Yearly gas in storage (%) in the EU") +
-  theme(legend.position = "top")
+baseLinePlot +
+  geom_area(
+    data = subset(df_gas_storage_eu, year == 2020),
+    aes(x = plot_date, y = full_avg), 
+    fill = "white") +
+  geom_line(
+    data = df_gas_storage_eu,
+    aes(x = plot_date, y = full, group = year, colour = year >= 2021, size = year >= 2021)) +
+  geom_text(
+    data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full, label = format(gasDayStartedOn, "%d/%m/%y")), 
+    size = 3, colour = "black", hjust = 1, nudge_y = -5) +
+  geom_text(
+    data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
+    size = 6, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold")
 
 df_gas_storage_eu %>% 
   select(plot_date, year, full, full_avg) %>% 
@@ -118,71 +158,83 @@ df_gas_storage_eu %>%
 
 ## Country storage levels
 
-### evolution
-
-Er zijn verschillen tussen de Europese landen. In België en Frankrijk zijn de gasreserves gevuld naar verwachting en liggen dicht tegen de gemiddelden. Landen als Duitsland en Nederland kampen met een duidelijk lagere opslag dan normaal.
-
-De curves van Italië blijken jaar na jaar heel dicht tegen de gemiddelden te liggen, met zeer weinig afwijking. Hoe komt dit?
-
+### Where are levels below avg...
 ```{r}
 
-## plotted countries
-plot_c <-c("BE","NL","DE","FR","IT")
+countries_below <- df_gas_diff %>% 
+  filter(diff <= -15)
 
 ## plot
 df_plot <- df_gas_storage %>%
-  filter(country %in% plot_c)
+  filter(country %in% countries_below$country)
 
-df_plot %>%
-  ggplot() +
-    geom_area(data = subset(df_plot, year == 2019),
-            aes(x = plot_date, y = gasInStorage_avg), color = "black", linetype = "11", alpha = 0.4) +
-  geom_line(aes(x = plot_date, y = gasInStorage, group = year, col = as.factor(year))) +
-  gghighlight::gghighlight(year %in% c(2020:2021), calculate_per_facet = T, use_direct_label = F) +
-  scale_x_date(date_labels = "%b") +
-  scale_color_manual(values = c("orange","blue")) +
-  facet_wrap(~country_name_nl, ncol = 3, scales = "free") +
-  theme_minimal() +
-  theme(
-    legend.position = "top",
-    panel.grid.minor.y = element_blank()
-    )
-
-  # ggplot() +
-  # geom_area(data = subset(df_avg_consumption, geo %in% filter_countries),
-  #           aes(x = plot_date, y = avg_values), col = "black", linetype = "11", alpha = 0.1) +
-  # geom_line(aes(x = plot_date, y = values_gwh, col = as.factor(year)), alpha = 0.6) +
-  # gghighlight::gghighlight(year >= 2020, calculate_per_facet = T, use_direct_label = F) +
-  # scale_x_date(date_labels = "%b") +
-  # facet_wrap(~geo, scales = "free") +
-  # labs(
-  #   x = "", y = "",
-  #   subtitle = "Monthly consumption natural gas, in GWh",
-  #   caption = "Source: Eurostat"
-  # ) +
-  # scale_color_manual(values = c("orange","blue")) +
-  # theme_minimal() +
-  # theme(
-  #   legend.position = "top",
-  #   panel.grid.minor.y = element_blank()
-  #   )
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full, group = year, colour = year >= 2021, size = year >= 2021)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
+    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, scales = "free_x")
 
 ```
 
-### current levels
+### ...same level
+```{r}
 
-Hoe uitzonderlijk zijn die lage gasreserves? Het grootste verschil doet zich voor in Nederland waar de gasreserves beduidend lager zijn dan normaal. Ook in Duitsland en Oostenrijk is dat te zien.
+countries_middle <- latest_data %>% 
+  filter(diff > -15  & diff < 5)
 
-Opvallend dat ze in het VK op dit moment veel meer gas hebben opgeslagen dan de jaren voordien.
+## plot
+df_plot <- df_gas_storage %>%
+  filter(country %in% countries_middle$country)
+
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full, group = year, colour = year >= 2021, size = year >= 2021)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
+    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, ncol = 3, scales = "free_x")
+
+```
+
+
+### ...above avg?
 
 ```{r}
 
-df_gas_storage %>%
-  filter(year == 2021) %>%
-  ggplot(aes(x = gasDayStartedOn, y = full, col = country_name_nl)) +
-  geom_line() +
-  gghighlight::gghighlight(country %in% plot_c, use_direct_label = F) +
-  scale_x_date(date_labels = "%b")
+countries_middle <- latest_data %>% 
+  filter(diff > 5)
+
+## plot
+df_plot <- df_gas_storage %>%
+  filter(country %in% countries_middle$country)
+
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full, group = year, colour = year >= 2021, size = year >= 2021)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
+    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, ncol = 2, scales = "free_x")
 
 ```
 
@@ -190,81 +242,22 @@ df_gas_storage %>%
 
 ```{r}
 
-df_gas_diff <- df_gas_storage %>%
-  filter(year == 2021 & gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0) %>% 
-  mutate(diff = (gasInStorage / gasInStorage_avg - 1)*100)
+# devtools::install_github("NightingaleHealth/ggforestplot")
 
-df_gas_diff %>%
-  ggplot(aes(x=full, y = reorder(country_name_nl, full), xend=full_avg, color=diff>0)) +
-  ggalt::geom_dumbbell(size=2,
-                colour_x = "black", colour_xend = "grey",
-                dot_guide=TRUE, dot_guide_size=0.25) +
-  scale_color_manual(values = c("#EF5350","#90ee02"), breaks = c(FALSE, TRUE)) +
+basePlot +
+  ggalt::geom_dumbbell(
+    data = df_gas_diff,
+    aes(x=full, y = reorder(country_name_nl, full), xend=full_avg),
+    size=0.5, size_x = 3, size_xend = 3, colour = "black", colour_x = "black", colour_xend = "white", dot_guide=FALSE) +
+  # scale_color_manual(values = c("#EF5350","#90ee02"), breaks = c(FALSE, TRUE)) +
   labs(x=NULL, y=NULL, subtitle = "Current gas storage levels vs avg 2011-2020") +
-  scale_x_continuous(limits = c(40,100)) +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-df_gas_diff %>% 
-  ggplot(aes(x = reorder(country_name_nl, diff), y = diff, fill = diff>0)) +
-  geom_col() +
-  coord_flip()
+  scale_x_continuous(limits = c(0,100))
 
 df_gas_diff %>%
   select(country_name_nl, full, full_avg, diff) %>% 
   write.csv("export/dw-2.csv", row.names = F)
 
 ```
-
-
-#### higer
-
-```{r}
-
-df_gas_diff %>%
-  top_n(3, diff) %>%
-  distinct(country_name_nl)
-
-```
-
-
-#### normal
-
-```{r}
-
-df_gas_diff %>%
-  top_n(-3, abs(diff)) %>% 
-  distinct(country_name_nl)
-
-```
-
-
-#### lower
-```{r}
-
-df_gas_diff %>%
-  top_n(-3, diff) %>%
-  distinct(country_name_nl)
-
-```
-
-```{r}
-
-df_gas_diff %>% 
-  ggplot(aes(x = full, y = diff)) +
-  geom_hline(yintercept = 0) +
-  geom_hline(yintercept = 0.1824005, linetype = "11") +
-  geom_hline(yintercept = -0.1824005, linetype = "11") +
-  geom_point(col = "red") +
-  ggrepel::geom_text_repel(aes(label = country_name_nl), size = 2.5) +
-  scale_y_continuous(labels = scales::percent_format()) +
-  labs(
-    x = "Voorraad gevuld (%)",
-    y = "verschil met gem. 2011-2020"
-  )
-
-```
-
 
 ### gas dependency
 
@@ -740,9 +733,31 @@ df_monthly_consumption %>%
 
 ```
 
-## import - export = netto
-netto - voorraad
+## GAS PRICE
 ```{r}
 
+gas_price <- fromJSON("https://www.theice.com/marketdata/DelayedMarkets.shtml?getHistoricalChartDataAsJson=&marketId=5325990&historicalSpan=3") %>%
+  as.data.frame() %>% 
+  `colnames<-`(c("date","price","marketId")) %>% 
+  mutate(
+    date = as.Date(date, "%a %b %d %H:%M:%S %Y"),
+    price = as.numeric(price)
+    )
+
+gas_price
+
 ```
+
+```{r}
+
+gas_price %>% 
+  ggplot(aes(x = date, y = price)) +
+  geom_vline(xintercept = seq.Date(ymd("2020-01-01"),ymd("2022-01-01"), "year"), size = 0.2) +
+  geom_area(alpha = 0.4) +
+  geom_line() +
+  scale_x_date(date_labels = "%b %y", expand = c(0,0)) +
+  scale_y_continuous(limits = c(0,200), expand = c(0,0))
+
+```
+
 
