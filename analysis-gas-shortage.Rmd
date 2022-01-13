@@ -96,7 +96,7 @@ df_gas_dependency <- df_gas_storage %>%
 ```{r}
 
 df_gas_diff <- df_gas_storage %>%
-  filter(year == 2021 & gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0) %>% 
   mutate(diff = full - full_avg)
 
 ```
@@ -142,11 +142,11 @@ baseLinePlot +
   geom_text(
     data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
     aes(x = plot_date, y = full, label = format(gasDayStartedOn, "%d/%m/%y")), 
-    size = 3, colour = "black", hjust = 1, nudge_y = -5) +
+    size = 3, colour = "black", hjust = 0, nudge_y = -5) +
   geom_text(
     data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
     aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
-    size = 6, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold")
+    size = 6, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold")
 
 df_gas_storage_eu %>% 
   select(plot_date, year, full, full_avg) %>% 
@@ -179,7 +179,7 @@ baseLinePlot +
   geom_text(
     data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
     aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
-    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
   facet_wrap(~country_name_nl, scales = "free_x")
 
 ```
@@ -187,7 +187,7 @@ baseLinePlot +
 ### ...same level
 ```{r}
 
-countries_middle <- latest_data %>% 
+countries_middle <- df_gas_diff %>% 
   filter(diff > -15  & diff < 5)
 
 ## plot
@@ -205,7 +205,7 @@ baseLinePlot +
   geom_text(
     data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
     aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
-    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
   facet_wrap(~country_name_nl, ncol = 3, scales = "free_x")
 
 ```
@@ -215,7 +215,7 @@ baseLinePlot +
 
 ```{r}
 
-countries_middle <- latest_data %>% 
+countries_middle <- df_gas_diff %>% 
   filter(diff > 5)
 
 ## plot
@@ -233,7 +233,7 @@ baseLinePlot +
   geom_text(
     data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
     aes(x = plot_date, y = full, label = paste0(round(full), "%")), 
-    size = 4, colour = "black", hjust = 1, nudge_y = -10, fontface = "bold") +
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
   facet_wrap(~country_name_nl, ncol = 2, scales = "free_x")
 
 ```
