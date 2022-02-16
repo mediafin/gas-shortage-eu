@@ -66,15 +66,15 @@ df_gas_storage <- df_gas_storage %>%
   ) %>%
   ungroup()
 
-url <- "https://www.theice.com/marketdata/DelayedMarkets.shtml?getHistoricalChartDataAsJson=&marketId=5350859&historicalSpan=3"
+current_date_unix <- as.numeric(as.POSIXct(Sys.Date()))
+req <- fromJSON(paste0("https://query1.finance.yahoo.com/v8/finance/chart/TTF=F?symbol=TTF%3DF&period1=1514761200&period2=",current_date_unix,"&useYfid=true&interval=1d&includePrePost=true&events=div%7Csplit%7Cearn&lang=en-US&region=US&crumb=WsWFbvfVGqa&corsDomain=finance.yahoo.com"))
 
-gas_price <- fromJSON(url) %>%
-  as.data.frame() %>% 
-  `colnames<-`(c("date","price","marketId")) %>% 
-  mutate(
-    date = as.Date(date, "%a %b %d %H:%M:%S %Y"),
-    price = as.numeric(price)
-  )
+gas_price <- data.frame(
+  date = req$chart$result$timestamp %>% unlist(),
+  price = req$chart$result$indicators$adjclose %>% unlist()
+) %>% 
+  `rownames<-`(NULL) %>% 
+  mutate(date = as.Date(as.POSIXct(date, origin = "1970-01-01", tz = "UTC")))
 
 ## EXPORT
 

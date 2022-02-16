@@ -46,7 +46,7 @@ df_gas_storage_eu <- df_gas_storage %>%
 ## withdrawal data for Europe
 df_gas_withdrawal_eu <- df_gas_storage %>%
   filter(country == "EU" & !is.na(withdrawal)) %>%
-  filter(plot_date <= "2021-03-01" & year >= 2021)
+  filter(plot_date <= "2021-03-01" & year >= 2015)
 
 ```
 
@@ -376,10 +376,8 @@ winter_consumption %>%
 
 gas_price %>%
   ggplot(aes(x = date, y = price)) +
-  geom_vline(xintercept = seq.Date(ymd("2020-01-01"),ymd("2023-01-01"), "year"), size = 0.2) +
   geom_area(alpha = 0.4) +
   geom_line() +
-  scale_x_date(date_labels = "%b %y") +
   scale_y_continuous(limits = c(0,200), expand = c(0,0))
 
 ```
@@ -452,9 +450,10 @@ gazprom_gas_physical <- gazprom_gas_physical %>%
 ```{r}
 
 gazprom_gas_physical %>% 
-  filter(date_floor >= "2021-06-01" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
-  ggplot(aes(x = date_floor, y = value, fill = category)) +
-  geom_col()
+  filter(date_floor >= "2021-10-01" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
+  ggplot(aes(x = date_floor, y = value)) +
+  geom_col() +
+  facet_wrap(~category, scales = "free_y")
 
 ```
 
