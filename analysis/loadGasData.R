@@ -66,7 +66,7 @@ df_gas_storage <- df_gas_storage %>%
   ) %>%
   ungroup()
 
-current_date_unix <- as.numeric(as.POSIXct(Sys.Date()))
+current_date_unix <- as.numeric(round(as.POSIXct(Sys.time())), "minutes")
 req <- fromJSON(paste0("https://query1.finance.yahoo.com/v8/finance/chart/TTF=F?symbol=TTF%3DF&period1=1514761200&period2=",current_date_unix,"&useYfid=true&interval=1d&includePrePost=true&events=div%7Csplit%7Cearn&lang=en-US&region=US&crumb=WsWFbvfVGqa&corsDomain=finance.yahoo.com"))
 
 gas_price <- data.frame(
