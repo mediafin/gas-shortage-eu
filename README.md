@@ -7,6 +7,9 @@ This repo contains the data analysis for all data concerning the gas industry.
 ### Gas storage levels
 The European gas storage levels can be found on the [website of GIE Aggregated Gas Story Inventory](https://agsi.gie.eu/#/). We use their API to collect their data in R and node.
 
+### Gas price
+[Intercontinental Exchange® (ICE)](https://www.theice.com/products/27996665/Dutch-TTF-Gas-Futures/data?marketId=5350859&span=3) has the Dutch TTF Gas Futures index we use to show the price for natural gas. This index should be updated every month since it indicates the price for gas for a specific month.
+
 ### Gas pipelines infrastructure
 The [SciGRID_gas project](https://www.gas.scigrid.de/downloads.html) has developed a European gas transportation network model with geojsons we can use to visualize on a map.
 
