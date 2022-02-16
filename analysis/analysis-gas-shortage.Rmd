@@ -1,0 +1,485 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## Libraries
+```{r}
+
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+
+library(rvest)
+library(httr)
+library(eurostat)
+
+library(gghighlight)
+
+```
+
+## Get & Wrangle Data
+
+GIE-data: https://agsi.gie.eu/#/api
+API-key: 21318434befcb49923bb06332c0c571a
+
+(Ik heb een API-key aangemaakt maar ik gebruik die eigenlijk nergens dus ik weet niet of je die nodig hebt of niet.)
+
+
+```{r}
+
+source("loadGasData.R")
+
+```
+
+## Subsets
+```{r}
+
+## last available data for each country
+df_gas_latest <- df_gas_storage %>%
+  filter(gasDayStartedOn == max(gasDayStartedOn, na.rm = T) & full > 0)
+
+## data for Europe
+df_gas_storage_eu <- df_gas_storage %>% 
+  filter(country == "EU")
+
+## withdrawal data for Europe
+df_gas_withdrawal_eu <- df_gas_storage %>%
+  filter(country == "EU" & !is.na(withdrawal)) %>%
+  filter(plot_date <= "2021-03-01" & year >= 2021)
+
+```
+
+## GAS STORAGE LEVELS
+
+### EU storage levels
+
+#### Baseplots
+```{r}
+
+basePlot <- ggplot() +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "#FFDF00"),
+    legend.position = "none",
+    panel.grid = element_line(colour = "#a7a5a6", size = 0.1),
+    panel.grid.minor.y = element_blank(),
+    panel.ontop = TRUE
+    )
+
+baseLinePlot <- basePlot +
+  labs(x = NULL, y = NULL, subtitle = "Yearly gas in storage (%) in the EU") +
+  scale_colour_manual(values = c("#a7a5a6","black")) +
+  scale_size_manual(values = c(0.2, 1)) +
+  scale_x_date(date_labels = "%b", expand = c(0,0)) +
+  scale_y_continuous(breaks = seq(0, 100, 25), limits = c(0,100), position = "right", expand = c(0,0))
+
+```
+
+#### Plot EU linegraph
+```{r}
+
+## plot eu gas storage graph
+baseLinePlot +
+  geom_area(
+    data = subset(df_gas_storage_eu, year == 2020),
+    aes(x = plot_date, y = full_avg * 100), 
+    fill = "white") +
+  geom_line(
+    data = df_gas_storage_eu,
+    aes(x = plot_date, y = full * 100, group = year, colour = year >= 2022, size = year >= 2022)) +
+  geom_text(
+    data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full * 100, label = format(gasDayStartedOn, "%d/%m/%y")), 
+    size = 3, colour = "black", hjust = 0, nudge_y = -5) +
+  geom_text(
+    data = subset(df_gas_storage_eu, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full * 100, label = paste0(round(full * 100), "%")), 
+    size = 6, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold")
+
+```
+
+#### Storage withdrawals
+```{r}
+
+df_gas_withdrawal_eu %>%
+  ggplot(aes(x = plot_date, y = cumWithdrawal)) +
+  geom_ribbon(aes(ymin = withdrawal_min, ymax = withdrawal_max), alpha = 0.2, fill = "grey") +
+  geom_line(aes(y = withdrawal_avg), colour = "grey") +
+  geom_line(aes(colour = factor(year))) +
+  gghighlight(year >= 2021) +
+  scale_x_date(date_labels = "%d %b", expand = c(0,0))
+
+```
+
+#### Projection
+When will levels reach the 2015-2020 range?
+```{r}
+
+## calculate avg withdrawals based on the 2015-20 range
+avg_withdrawals <- df_gas_storage %>%
+  group_by(plot_date, country) %>% 
+  summarise(
+    avg_withdrawal = (mean(withdrawal[year>=2022-5], na.rm = T) - mean(injection[year>=2022-5], na.rm = T))/ 1000,
+    withdrawal_min = min(gasInStorage[year>=2015 & year<=2020]),
+    withdrawal_max = max(gasInStorage[year>=2015 & year<=2020])
+    ) %>% 
+  ungroup()
+
+## calculate projection till end of year
+df_gas_projection <- df_gas_storage %>% 
+  group_by(country) %>% 
+  tidyr::complete(gasDayStartedOn = seq.Date(from = max(gasDayStartedOn, na.rm = T), to = ymd("2022-12-31"), by="day")) %>%
+  arrange(gasDayStartedOn) %>% 
+  fill(year, gasInStorage) %>% 
+  mutate(plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d")))) %>% 
+  ungroup() %>%
+  filter(country %in% c("EU")) %>% 
+  filter(year >= 2022) %>%
+  select(-c(withdrawal_min, withdrawal_max)) %>%
+  left_join(avg_withdrawals, by = c("plot_date","country")) %>% 
+  select(country, plot_date, gasDayStartedOn, gasInStorage, avg_withdrawal, withdrawal_min, withdrawal_max) %>% 
+  group_by(country) %>% 
+  mutate(
+    avg_withdrawal = ifelse(gasDayStartedOn > max(df_gas_storage$gasDayStartedOn, na.rm = T), avg_withdrawal, 0),
+    category = ifelse(gasDayStartedOn > max(df_gas_storage$gasDayStartedOn, na.rm = T), "projection", "gasInStorage"),
+    gasInStorage = ifelse(gasDayStartedOn > max(df_gas_storage$gasDayStartedOn, na.rm = T), gasInStorage - cumsum(avg_withdrawal), gasInStorage),
+    diff = gasInStorage - withdrawal_min
+      )
+
+## calculate when projection will hit the 2015-20 range
+intersection_point <- df_gas_projection %>% 
+  slice(0 : which.max(diff >= 0)) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn))
+
+## plot graph
+df_gas_projection %>% 
+  ggplot(aes(x = gasDayStartedOn)) +
+  geom_ribbon(aes(ymin = withdrawal_min, ymax = withdrawal_max), alpha = 0.5) +
+  geom_line(aes(y = gasInStorage, colour = category)) +
+  geom_point(data = intersection_point, aes(y = gasInStorage)) +
+  geom_text(data = intersection_point, aes(y = gasInStorage, label = gasDayStartedOn), hjust = 0, nudge_x = 2.5) +
+  facet_wrap(~country, scales = "free_y", ncol = 1) +
+  scale_x_date(date_labels = '%b', breaks = seq.Date(from = ymd("2022-01-01"), to = ymd("2022-12-01"), by = "1 month")) +
+  theme(legend.position = "top")
+
+```
+
+
+
+### Country storage levels
+
+#### Where are levels below avg...
+```{r}
+
+## subset for countries below avg
+countries_below <- df_gas_latest %>% 
+  filter(diff <= -15)
+
+## filter countries we want to plot
+df_plot <- df_gas_storage %>%
+  filter(country %in% countries_below$country)
+
+## plot graph
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg * 100), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full * 100, group = year, colour = year >= 2022, size = year >= 2022)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full * 100, label = paste0(round(full * 100), "%")), 
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, scales = "free_x")
+
+```
+
+#### ...same level
+```{r}
+
+countries_middle <- df_gas_latest %>% 
+  filter(diff > -15  & diff < 15)
+
+## plot
+df_plot <- df_gas_storage %>%
+  filter(country %in% countries_middle$country)
+
+## plot graph
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg * 100), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full * 100, group = year, colour = year >= 2022, size = year >= 2022)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full * 100, label = paste0(round(full * 100), "%")), 
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, scales = "free_x")
+
+```
+
+
+#### ...above avg?
+
+```{r}
+
+countries_middle <- df_gas_latest %>% 
+  filter(diff >= 15)
+
+## plot
+df_plot <- df_gas_storage %>%
+  filter(country %in% countries_middle$country)
+
+## plot graph
+baseLinePlot +
+  geom_area(
+    data = subset(df_plot, year == 2020),
+    aes(x = plot_date, y = full_avg * 100), 
+    fill = "white") +
+  geom_line(
+    data = df_plot,
+    aes(x = plot_date, y = full * 100, group = year, colour = year >= 2022, size = year >= 2022)) +
+  geom_text(
+    data = subset(df_plot, gasDayStartedOn == max(gasDayStartedOn, na.rm = T)),
+    aes(x = plot_date, y = full * 100, label = paste0(round(full * 100), "%")), 
+    size = 4, colour = "black", hjust = 0, nudge_y = -10, fontface = "bold") +
+  facet_wrap(~country_name_nl, scales = "free_x")
+
+```
+### Export
+```{r}
+
+## export data for european gas storage levels
+df_gas_storage_eu %>% 
+  select(plot_date, year, full, full_avg) %>% 
+  spread(year, full) %>%
+  filter(!is.na(plot_date)) %>% 
+  write.csv("export/eu-storage-levels.csv", row.names = F)
+
+## export gas withdrawals for EU
+df_gas_withdrawal_eu %>%
+  select(plot_date, year, cumWithdrawal, withdrawal_min, withdrawal_max, withdrawal_avg) %>% 
+  spread(year, cumWithdrawal) %>% 
+  write_csv("export/eu-storage-withdrawals.csv")
+
+```
+
+## CONSUMPTION
+
+### get data
+```{r}
+
+library(eurostat)
+
+# df_eurostat_toc
+df_monthly_consumption <- get_eurostat("nrg_cb_gasm", type = "label") %>%
+  mutate(
+    geo = gsub("Germany \\(until 1990 former territory of the FRG\\)","Germany", geo),
+    plot_date = lubridate::ymd(paste0("2021-",format(time, "%m-%d"))),
+    year = lubridate::year(time)
+    ) %>%
+  filter(nrg_bal == "Inland consumption - observed") %>%
+  filter(unit == "Terajoule (gross calorific value - GCV)") %>% 
+  rename(values_tj = values) %>% 
+  select(-unit) %>% 
+  mutate(values_gwh = values_tj / 3.6)
+
+glimpse(df_monthly_consumption)
+
+```
+
+### average consumption
+```{r}
+
+df_avg_consumption <- df_monthly_consumption %>%
+  group_by(geo, plot_date) %>%
+  summarise(avg_values = mean(values_gwh[year != 2022], na.rm = TRUE)) %>% 
+  ungroup()
+
+df_avg_consumption %>%
+  filter(geo %in% c("Belgium","France","Netherlands","Germany","European Union - 27 countries (from 2020)")) %>%
+  ggplot(aes(x = plot_date, y = avg_values)) +
+  geom_area(alpha = 0.2) +
+  geom_line(linetype = "11") +
+  scale_x_date(date_labels = "%b") +
+  facet_wrap(~geo, scales = "free") +
+  labs(
+    x = "", y = "",
+    subtitle = "Monthly consumption natural gas, in GWh",
+    caption = "Source: Eurostat"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+```{r}
+
+current_storage_values <- df_gas_storage %>% 
+  group_by(geo = country_name, country_name_nl) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  ungroup() %>% 
+  select(geo, country_name_nl, gasInStorage, full) %>%
+  filter(!is.na(full))
+
+winter_consumption <-  df_avg_consumption %>% 
+  filter(plot_date == "2021-01-01" | plot_date >= "2021-11-01") %>% 
+  group_by(geo) %>% 
+  summarise(winterConsumptionGWh = sum(avg_values)) %>% 
+  mutate(dailyWinterConsumptionGWh = winterConsumptionGWh/(92)) %>%  # 92 days in nov, dec and jan
+  inner_join(current_storage_values, by = "geo") %>% 
+  mutate(
+    consumptionDays = gasInStorage * 1000 / dailyWinterConsumptionGWh
+  )
+
+```
+
+### Winter consumption
+```{r}
+
+winter_consumption %>% 
+  ggplot(aes(x = reorder(country_name_nl, consumptionDays), y = consumptionDays)) +
+  geom_col() +
+  geom_text(aes(label = round(consumptionDays, 0)), hjust = 1.1, size = 3, col = "white") +
+  coord_flip() +
+  labs(
+    x = NULL, y = NULL,
+    subtitle = "Hoeveel winterdagen kan elk land \nmet zijn huidige voorraden consumeren?"
+  )
+
+```
+### Export
+```{r}
+
+winter_consumption %>% 
+  mutate(
+    gasInStorage = gasInStorage * 1000,
+    `/` = "/",
+    `=` = "="
+    ) %>% 
+  select(LAND = country_name_nl, `RESERVE (GWh)` = gasInStorage,`/`, `GEM. VERBRUIK WINTERDAG (GWh)` = dailyWinterConsumptionGWh,`=`,`AANTAL DAGEN`=consumptionDays) %>% 
+  write.csv("export/table.csv", row.names = F)
+
+```
+
+
+## GAS PRICE
+
+### Plot gas price
+```{r}
+
+gas_price %>%
+  ggplot(aes(x = date, y = price)) +
+  geom_vline(xintercept = seq.Date(ymd("2020-01-01"),ymd("2023-01-01"), "year"), size = 0.2) +
+  geom_area(alpha = 0.4) +
+  geom_line() +
+  scale_x_date(date_labels = "%b %y") +
+  scale_y_continuous(limits = c(0,200), expand = c(0,0))
+
+```
+
+## PHYSICAL FLOW
+
+### Ukraine Gas Grid Operator
+
+#### collect data
+```{r}
+
+## physical flow
+ua_gas_physical <- fromJSON("http://apitransplath.tsoua.com:8000/datasource/Physics?datefrom=2021-01-01&limit=-1")
+
+## booked capacity
+ua_gas_booked <- fromJSON("http://apitransplath.tsoua.com:8000/datasource/Capacity?datefrom=2021-01-01&limit=-1")
+
+```
+
+#### plot data
+```{r}
+
+ua_gas_physical %>% 
+  `colnames<-`(c("date","volume_cm","country","group","ip_name","direction")) %>% 
+  mutate(
+    date = ymd(date),
+    date_floor = floor_date(date, "1 month")
+    ) %>% 
+  filter(direction == "Entry" & group == "Cross-border points") %>% 
+  group_by(date_floor, country, group, direction) %>% 
+  summarise(
+    volume_mln_m3 = sum(volume_cm, na.rm = T) / 1000000
+  ) %>%
+  ggplot(aes(x = date_floor, y = volume_mln_m3, fill = country)) +
+  geom_col()
+
+```
+### Gazprom
+
+#### collect data
+```{r}
+
+gazprom_gas_physical <- data.frame()
+
+## Loop over all the years we want to collect
+for (i in seq(2021, 2022)) {
+  url <- paste0("https://www.gazprom.com/investors/disclosure/actual-supplies/", i)
+  
+  df_temp <-read_html(url) %>% 
+    html_elements(".text_data") %>% 
+    html_table(fill = T) %>% 
+    bind_rows()
+  
+  gazprom_gas_physical <- bind_rows(gazprom_gas_physical, df_temp)
+  
+}
+
+gazprom_gas_physical <- gazprom_gas_physical %>% 
+  mutate(
+    Date = as.Date(Date, "%b %d, %Y"),
+    date_floor = floor_date(Date, "1 week")
+    ) %>% 
+  gather("category","value", -c(Date, date_floor)) %>% 
+  group_by(date_floor, category) %>% 
+  summarise(value = sum(value, na.rm = T))
+
+```
+
+#### plot data
+```{r}
+
+gazprom_gas_physical %>% 
+  filter(date_floor >= "2021-06-01" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
+  ggplot(aes(x = date_floor, y = value, fill = category)) +
+  geom_col()
+
+```
+
+#### export
+```{r}
+
+gazprom_gas_physical %>% 
+  spread(category, value) %>% 
+  `colnames<-`(c("date_floor", "Door Wit-Rusland (YAMAL-Europe)", "Door Oekraïne", "Nordstream, Turkstream en door Baltische regio")) %>% 
+  filter(year(date_floor) >= "2021" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
+  write_csv("export/physical-gazprom.csv")
+
+```
+
+## GAS DEPENDENCY
+```{r}
+
+df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
+  gather("category","dep_perc", -country_name)
+
+## bind storage and dependency df together
+df_gas_dependency <- df_gas_storage %>% 
+  group_by(country) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>%
+  left_join(df_gas_dependency %>% filter(category == "Natural Gas"), by = c("country_name")) %>% 
+  filter(!is.na(dep_perc))
+
+```
