@@ -1,12 +1,14 @@
 library(dplyr)
 library(jsonlite)
 library(readr)
+library(httr)
 options(timeout = 1000)
+apiKey <- "392e5031c111057ef77c084bc42a192c"
 
 ## get available countries
-list_of_countries <- fromJSON("https://agsi.gie.eu/api/eic-listing/SSO/view") %>% 
+list_of_countries <- jsonlite::fromJSON("https://agsi.gie.eu/api/eic-listing/SSO/view") %>% 
   distinct(country) %>% 
-  filter(country != "IE")
+  filter(!(country %in% c("IE","UA")))
 
 df_gas_storage <- data.frame()
 
@@ -15,7 +17,10 @@ for (i in c(list_of_countries$country, "eu")) {
   
   print(i)
   
-  df_gas_storage_temp <- fromJSON(paste0("https://agsi.gie.eu/api/data/",i)) %>% 
+  req <- GET(paste0("https://agsi.gie.eu/api/data/",i), httr::add_headers('x-key' = apiKey))
+  stop_for_status(req)
+  
+  df_gas_storage_temp <- jsonlite::fromJSON(rawToChar(req$content)) %>% 
     mutate(country = toupper(i))
   
   df_gas_storage <- bind_rows(df_gas_storage, df_gas_storage_temp)
@@ -24,6 +29,7 @@ for (i in c(list_of_countries$country, "eu")) {
 ## datawrangling
 df_gas_storage <- df_gas_storage %>% 
   mutate(
+    country = gsub("\\*","",country),
     country_name = ifelse(country == "EU", "European Union", countrycode::countrycode(country, origin = 'iso2c', destination = 'country.name')),
     country_name_nl = ifelse(country == "EU", "Europese Unie", countrycode::countrycode(country, origin = 'iso2c', destination = 'cldr.name.nl')),
     gasDayStartedOn = as.Date(gasDayStartedOn, "%Y-%m-%d"),
@@ -35,6 +41,7 @@ df_gas_storage <- df_gas_storage %>%
     year = lubridate::year(gasDayStartedOn),
     plot_date = as.Date(paste0("2021-", format(gasDayStartedOn,"%m-%d")))
   ) %>% 
+  filter(!is.na(gasInStorage)) %>% 
   arrange(gasDayStartedOn) %>%
   group_by(country, year) %>% 
   mutate(
@@ -66,8 +73,10 @@ df_gas_storage <- df_gas_storage %>%
   ) %>%
   ungroup()
 
+## Get price data
+print("downloading price data")
 current_date_unix <- as.numeric(round(as.POSIXct(Sys.time())), "minutes")
-req <- fromJSON(paste0("https://query1.finance.yahoo.com/v8/finance/chart/TTF=F?symbol=TTF%3DF&period1=1514761200&period2=",current_date_unix,"&useYfid=true&interval=1d&includePrePost=true&events=div%7Csplit%7Cearn&lang=en-US&region=US&crumb=WsWFbvfVGqa&corsDomain=finance.yahoo.com"))
+req <- jsonlite::fromJSON(paste0("https://query1.finance.yahoo.com/v8/finance/chart/TTF=F?symbol=TTF%3DF&period1=1514761200&period2=",current_date_unix,"&useYfid=true&interval=1d&includePrePost=true&events=div%7Csplit%7Cearn&lang=en-US&region=US&crumb=WsWFbvfVGqa&corsDomain=finance.yahoo.com"))
 
 gas_price <- data.frame(
   date = req$chart$result$timestamp %>% unlist(),
@@ -78,15 +87,11 @@ gas_price <- data.frame(
 
 ## EXPORT
 
-### gas storage levels
-df_gas_storage %>%
-  filter(year>=2021 & !is.na(full) & plot_date != "2021-02-28") %>%
-  select(country, country_name_nl, gasDayStartedOn, plot_date, year, full, full_avg, full_min, full_max, gasInStorage, currentLevel, diff) %>%
-  filter(country_name_nl != "Ierland") %>%
-  arrange(-year, currentLevel, desc(plot_date)) %>% 
-  write_json("../webpage/src/data/storage_levels.json")
-
 ### gas prices
 gas_price %>% 
   arrange(desc(date)) %>% 
   write_json("../webpage/src/data/gas_price.json")
+
+gas_price %>% 
+  arrange(desc(date)) %>% 
+  write_csv("../webpage/src/data/gas_price.csv")

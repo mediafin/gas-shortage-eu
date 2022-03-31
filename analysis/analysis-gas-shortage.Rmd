@@ -15,6 +15,7 @@ library(httr)
 library(eurostat)
 
 library(gghighlight)
+library(ggalluvial)
 
 ```
 
@@ -46,7 +47,7 @@ df_gas_storage_eu <- df_gas_storage %>%
 ## withdrawal data for Europe
 df_gas_withdrawal_eu <- df_gas_storage %>%
   filter(country == "EU" & !is.na(withdrawal)) %>%
-  filter(plot_date <= "2021-03-01" & year >= 2015)
+  filter(plot_date <= Sys.Date() - 2 & year >= 2015)
 
 ```
 
@@ -375,110 +376,461 @@ winter_consumption %>%
 ```{r}
 
 gas_price %>%
+  mutate(ra7_price = runMean(price, 7)) %>% 
+  filter(date >= "2021-01-01") %>% 
   ggplot(aes(x = date, y = price)) +
-  geom_area(alpha = 0.4) +
-  geom_line() +
+  geom_line(size = 0.2) +
+  geom_line(aes(y = ra7_price), colour = "red") +
   scale_y_continuous(limits = c(0,200), expand = c(0,0))
 
 ```
-
-## PHYSICAL FLOW
-
-### Ukraine Gas Grid Operator
-
-#### collect data
+## PIPELINES
 ```{r}
 
-## physical flow
-ua_gas_physical <- fromJSON("http://apitransplath.tsoua.com:8000/datasource/Physics?datefrom=2021-01-01&limit=-1")
+df_pipelines <- read_csv("https://greeninfo-network.github.io/global-gas-infrastructure-tracker/data/data.csv?v=2.1")
+  
+```
 
-## booked capacity
-ua_gas_booked <- fromJSON("http://apitransplath.tsoua.com:8000/datasource/Capacity?datefrom=2021-01-01&limit=-1")
+## GAS IMPORT
+```{r}
+View(eurostat::get_eurostat_toc())
+```
+
+
+```{r}
+
+gas_import <- get_eurostat("nrg_ti_gasm", type = "label") %>% 
+  filter(unit == "Million cubic metres" & values > 0)
+
+View(gas_import %>% 
+  filter(!(partner %in% c(unique(gas_import$geo), "Total", "Not specified"))) %>% 
+  filter(year(time) == 2021) %>% 
+  group_by(geo, siec) %>%
+  summarise(Total = sum(values, na.rm = T)))
 
 ```
 
-#### plot data
 ```{r}
 
-ua_gas_physical %>% 
-  `colnames<-`(c("date","volume_cm","country","group","ip_name","direction")) %>% 
-  mutate(
-    date = ymd(date),
-    date_floor = floor_date(date, "1 month")
-    ) %>% 
-  filter(direction == "Entry" & group == "Cross-border points") %>% 
-  group_by(date_floor, country, group, direction) %>% 
-  summarise(
-    volume_mln_m3 = sum(volume_cm, na.rm = T) / 1000000
-  ) %>%
-  ggplot(aes(x = date_floor, y = volume_mln_m3, fill = country)) +
-  geom_col()
+get_eurostat("nrg_ti_gasm", type = "label") %>% 
+  filter(siec == "Natural gas" & year(time) >= 2021 & values > 0) %>%
+  spread(unit, values) %>% 
+  ggplot(aes(x = `Million cubic metres`, y = `Terajoule (gross calorific value - GCV)`)) +
+  geom_point(alpha = 0.2, size = 0.5) +
+  geom_smooth(method = "lm", se = F, size = 0.2, colour = "red") +
+  scale_x_log10() +
+  scale_y_log10()
 
 ```
-### Gazprom
 
-#### collect data
 ```{r}
 
-gazprom_gas_physical <- data.frame()
+bp_regions <- c("North America","S. & Cent. America","Europe","CIS","Middle East","Africa","Asia Pacific")
 
-## Loop over all the years we want to collect
-for (i in seq(2021, 2022)) {
-  url <- paste0("https://www.gazprom.com/investors/disclosure/actual-supplies/", i)
-  
-  df_temp <-read_html(url) %>% 
-    html_elements(".text_data") %>% 
-    html_table(fill = T) %>% 
-    bind_rows()
-  
-  gazprom_gas_physical <- bind_rows(gazprom_gas_physical, df_temp)
-  
-}
+bp_trade_flows <- readxl::read_xlsx("data/bp-stats-review-2021-all-data.xlsx", sheet = "Gas - Trade movts - pipeline", range = "A3:X40") %>% 
+  fill(Continent, .direction = "up") %>% 
+  gather("From","Value", -c(To, Continent)) %>%
+  filter(Value > 0)
 
-gazprom_gas_physical <- gazprom_gas_physical %>% 
+bp_trade_flows_country <- bp_trade_flows %>% filter(!To %in% c(bp_regions,"Total exports"))
+bp_trade_flows_regions <- bp_trade_flows %>% filter(To %in% bp_regions)
+
+```
+
+```{r}
+
+library(ggalluvial)
+
+ggplot(data = bp_trade_flows_regions, aes(axis1 = From, axis2 = To, y = Value)) +
+  geom_alluvium(aes(fill = To)) +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  scale_x_discrete(limits = c("From", "To"), expand = c(0.15, 0.05)) +
+  theme_void() +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+
+bp_trade_flows_country %>% 
+  # filter(Continent %in% c("Europe","North America")) %>%
+  filter(From %in% c("Russian Federation","US")) %>%
+  ggplot(aes(axis1 = From, axis2 = To, y = Value)) +
+  geom_alluvium(aes(fill = Continent), decreasing = TRUE) +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  scale_x_discrete(limits = c("From", "To"), expand = c(0.15, 0.05)) +
+  theme(legend.position = "none")
+
+```
+## ENTSOG
+
+### How to map Entsog points
+```{r}
+
+## base table from Bruegel
+entsog_points <- read_xlsx("data/entsog_points.xlsx") %>%
+  mutate(id = entsog_point) %>% 
+  separate_rows(entsog_point, sep = "; ") %>% 
+  group_by(id) %>% 
+  mutate(entsog_capacity = entsog_capacity / n())
+
+## filter Russian points
+entsog_points_rus <- entsog_points %>% 
+  filter(exporting_country == "Russia") %>% 
+  mutate(exporting_route = ifelse(is.na(exporting_route), "other", exporting_route))
+
+entsog_points_rus %>% 
+  write_json("../webpage/data/throughputMeta.json")
+
+```
+
+### API call
+
+### hidtorical data
+
+```{r}
+
+source("entsogScraper.R")
+
+```
+
+### current month
+```{r}
+
+options(timeout = 500)
+
+"https://transparency.entsog.eu/api/v1/operationalData.xlsx?forceDownload=true&pointDirection=es-tso-0006lng-00012entry&from=2022-02-17&to=2022-03-20&indicator=Physical%20Flow,&periodType=day&timezone=CET&limit=-1&dataset=1&directDownload=true"
+
+## Get all gas import points since sept 2021
+df_gas_import <- content(GET(paste0("https://transparency.entsog.eu/api/v1/operationalData.csv?forceDownload=true&delimiter=comma&isTransportData=true&dataset=1&from=2022-01-01&to=",Sys.Date(),"&indicator=Physical%20Flow&periodType=day&timezone=CET&periodize=0&limit=-1&idPointType=1")))
+
+## Get all lng import points
+df_lng_import <- content(GET(paste0("https://transparency.entsog.eu/api/v1/operationalData.csv?forceDownload=true&delimiter=comma&isTransportData=true&dataset=1&from=2022-01-01&to=",Sys.Date(),"&indicator=Physical%20Flow&periodType=day&timezone=CET&periodize=0&limit=-1&idPointType=2")))
+
+df_entsog_2022 <- bind_rows(df_gas_import, df_lng_import)
+
+```
+
+### Subsets
+```{r}
+
+entsog_rus_phys_flow <- df_entsog %>%
+  filter(pointLabel %in% entsog_points_rus$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points_rus, by = c("pointLabel"="entsog_point")) %>%
   mutate(
-    Date = as.Date(Date, "%b %d, %Y"),
-    date_floor = floor_date(Date, "1 week")
-    ) %>% 
-  gather("category","value", -c(Date, date_floor)) %>% 
-  group_by(date_floor, category) %>% 
+    date = as.Date(periodFrom),
+    value = value / 1000000 # convert kWh to GWh
+    ) %>%
+  group_by(date, exporting_route) %>% 
   summarise(value = sum(value, na.rm = T))
 
+entsog_phys_by_country <- df_entsog %>% 
+  filter(pointLabel %in% entsog_points$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points, by = c("pointLabel"="entsog_point")) %>%
+  mutate(
+    date = floor_date(periodFrom, "1 day"),
+    value = value / 10000000 # convert kWh to GWh
+    ) %>%
+  group_by(date, exporting_country) %>% 
+  summarise(value = sum(value, na.rm = T))
+
+entsog_rus_phys_flow_weekly <- entsog_rus_phys_flow %>% 
+  mutate(date_floor = floor_date(date, "1 week")) %>% 
+  group_by(exporting_route, date_floor) %>% 
+  summarise(value =  sum(value))
+
 ```
 
-#### plot data
+### Export
 ```{r}
 
-gazprom_gas_physical %>% 
-  filter(date_floor >= "2021-10-01" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
+entsog_rus_phys_flow_weekly %>%
+  filter(date_floor >= "2021-10-01" & date_floor < floor_date(Sys.Date(), "1 week") & value > 0) %>%
+  rename(category = exporting_route) %>% 
+  jsonlite::write_json("../webpage/src/data/bars.json")
+
+entsog_rus_phys_flow %>%
+  filter(date < Sys.Date() & date >= "2021-12-01") %>% 
+  mutate(value = value * 100) %>%
+  spread(exporting_route, value) %>% 
+  write_csv("dw-russian-export.csv")
+
+```
+
+### Graphs
+
+### Russian gas (weekly)
+```{r}
+
+entsog_rus_phys_flow_weekly %>% 
+  filter(date_floor >= "2021-10-01" & date_floor < floor_date(Sys.Date(), "1 week") & value > 0) %>%
   ggplot(aes(x = date_floor, y = value)) +
   geom_col() +
-  facet_wrap(~category, scales = "free_y")
+  facet_wrap(~exporting_route, scales = "free")
 
 ```
 
-#### export
+#### Russian gas
 ```{r}
 
-gazprom_gas_physical %>% 
+entsog_rus_phys_flow %>%
+  # filter(exporting_route %in% c("yamal","nordstream","ukraine")) %>%
+  filter(date <= Sys.Date() - 2 & date >= "2021-10-01") %>%
+  ggplot(aes(x = date, y = value)) +
+  geom_area(aes(fill = exporting_route)) +
+  scale_x_date(breaks = seq.Date(ymd(floor_date(min(entsog_rus_phys_flow$date), "1 month")), ymd(floor_date(max(entsog_rus_phys_flow$date), "1 month")), "2 month"), date_labels = "%b/%y")
+
+```
+#### Eu gas import
+```{r}
+
+bump_data <- entsog_phys_by_country %>% 
+  filter(date < Sys.Date() - 1) %>%
+  mutate(
+    date = floor_date(date, "1 week"),
+    exporting_country = ifelse(exporting_country %in% c("Azerbaijan","Libya"), "Other",exporting_country)
+  ) %>% 
+  group_by(exporting_country, date) %>%
+  summarise(value = sum(value)) %>%
+  ungroup() %>%
+  filter(date < floor_date(Sys.Date(), "1 week") & date >= "2021-10-01")
+
+bump_data %>%
+  ggplot(aes(x = date, y = value, alluvium = exporting_country)) +
+  geom_alluvium(aes(fill = exporting_country, colour = exporting_country),
+                alpha = .75, decreasing = FALSE) +
+  scale_colour_brewer(type = "qual", palette = "Paired") +
+  scale_fill_brewer(type = "qual", palette = "Paired") +
+  theme_minimal()
+
+bump_data %>%
+  ggplot(aes(x = date, y = value, colour = exporting_country, fill = exporting_country)) +
+  geom_area() +
+  scale_colour_brewer(type = "qual", palette = "Paired") +
+  scale_fill_brewer(type = "qual", palette = "Paired") +
+  theme_minimal()
+
+```
+
+#### LNG gas import
+```{r}
+
+df_entsog %>%
+  filter(pointLabel %in% entsog_points$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points, by = c("pointLabel"="entsog_point")) %>%
+  mutate(
+    date = floor_date(periodFrom, "1 day"),
+    value = value / 1000000
+    ) %>% 
+  filter(exporting_country == "LNG" & !is.na(value)) %>% 
+  arrange(date) %>% 
+  group_by(pointLabel, date) %>%
+  summarise(value = sum(value)) %>% 
+  ungroup() %>%
+  group_by(pointLabel) %>% 
+  mutate(n = n()) %>% 
+  filter(n>7) %>%
+  filter(date >= "2022-01-01") %>% 
+  mutate(ra7_value = TTR::runMean(value, 7)) %>%
+  ggplot(aes(x = date, y = value, colour = pointLabel, fill = pointLabel)) +
+  # geom_point(aes(y = value), size = 0.5, alpha = 0.3) +
+  geom_line() +
+  gghighlight(pointLabel %in% c("Gate Terminal (I)"), use_direct_label = F)
+
+```
+```{r}
+
+df_plot <- df_entsog %>%
+  filter(pointLabel %in% entsog_points_rus$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points_rus, by = c("pointLabel"="entsog_point")) %>%
+  mutate(
+    date = as.Date(periodFrom),
+    value = value / 10000000
+    ) %>% 
+  group_by(date, exporting_route) %>% 
+  summarise(
+    value = sum(value, na.rm = T),
+    entsog_capacity = sum(entsog_capacity)/10)
+
+df_plot %>%
+  ggplot(aes(x = date, y = value, fill = exporting_route)) +
+  geom_col(width = 1) +
+  # geom_line(aes(y = entsog_capacity)) +
+  facet_wrap(~exporting_route, scales = "free")
+
+```
+
+```{r}
+
+entsog_phys_by_country %>% 
+  arrange(date) %>% 
+  group_by(exporting_country) %>%
+  mutate(ra7_value = runMean(value, 14)) %>%
+  filter(date >= "2021-01-01" & date < Sys.Date() - 2) %>%
+  ggplot(aes(x = date, y = value, colour = exporting_country)) +
+  geom_point(size = 0.1) +
+  geom_line(aes(y = ra7_value))
+
+entsog_phys_by_country %>% 
+  filter(date >= "2021-01-01" & date < Sys.Date() - 2) %>% 
+  arrange(date) %>% 
+  group_by(exporting_country) %>% 
+  mutate(ra7_value = runMean(value, 14)) %>%
+  ungroup() %>% 
+  gather("category","value", value, ra7_value) %>% 
+  mutate(category = paste(exporting_country, category)) %>% 
+  select(date, category, value) %>%
   spread(category, value) %>% 
-  `colnames<-`(c("date_floor", "Door Wit-Rusland (YAMAL-Europe)", "Door Oekraïne", "Nordstream, Turkstream en door Baltische regio")) %>% 
-  filter(year(date_floor) >= "2021" & date_floor < floor_date(Sys.Date(), "1 week")) %>%
-  write_csv("export/physical-gazprom.csv")
+  write_csv("entsog_phys_by_country.csv")
 
 ```
-
-## GAS DEPENDENCY
 ```{r}
 
-df_gas_dependency <- readxl::read_xlsx("data/gas-dependency.xlsx") %>% 
-  gather("category","dep_perc", -country_name)
+df_lng_points <- read.csv("data/IGGIN/data/IGGIN_LNGs.csv", sep = ";") %>%
+  select(name, lat, long)
 
-## bind storage and dependency df together
-df_gas_dependency <- df_gas_storage %>% 
-  group_by(country) %>% 
-  filter(gasDayStartedOn == max(gasDayStartedOn)) %>%
-  left_join(df_gas_dependency %>% filter(category == "Natural Gas"), by = c("country_name")) %>% 
-  filter(!is.na(dep_perc))
+lng_points <- jsonlite::fromJSON("data/IGGIN/data/IGGIN_LNGs.geojson")
+
+df_lng_points <- bind_cols(df_lng_points, lng_points$features$properties$param)
+
+df_lng_points %>% 
+  write_csv("lng-points.csv")
 
 ```
+
+```{r}
+
+lng_flow <- df_entsog %>%
+  filter(pointLabel %in% entsog_points$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points, by = c("pointLabel"="entsog_point")) %>%
+  mutate(
+    value = value / 1000000,
+    pointLabel = toupper(pointLabel)
+    ) %>% 
+  filter(exporting_country == "LNG" & !is.na(value) & periodFrom >= "2022-01-01") %>%
+  select(pointLabel, periodFrom, value) %>% 
+  group_by(pointLabel) %>% 
+  summarise(avgFlow = mean(value))
+
+df_lng_points %>% 
+  mutate(name = toupper(name)) %>% 
+  left_join(lng_flow, by = c("name"="pointLabel")) %>% 
+  ggplot(aes(x = reorder(name, max_cap_store2pipe_M_m3_per_d), y = max_cap_store2pipe_M_m3_per_d / 10.55 * 1000)) +
+  geom_col() +
+  geom_col(aes(y = avgFlow * 10), fill = "red", alpha = 0.6) +
+  coord_flip()
+
+lng_flow %>% left_join(df_lng_points %>%   mutate(name = toupper(name)), by = c("pointLabel"="name"))
+
+```
+
+```{r}
+
+entsog_phys_by_country %>%
+  mutate(date = floor_date(date, "1 week")) %>% 
+  filter(year(date) >= 2021 & date < floor_date(Sys.Date() - 2)) %>%
+  group_by(date, exporting_country) %>% 
+  summarise(value = sum(value, na.rm = T)) %>% 
+  ungroup() %>%
+  select(date, value, exporting_country) %>% 
+  # spread(exporting_country, value) %>%
+  # write_csv("dw-export-country.csv")
+  ggplot(aes(x = date, y = value, fill = exporting_country)) +
+  geom_area(position = "fill")
+
+```
+
+
+
+```{r}
+
+df_entsog %>% 
+  filter(pointLabel %in% entsog_points$entsog_point & directionKey == "entry") %>% 
+  left_join(entsog_points, by = c("pointLabel"="entsog_point")) %>%
+  mutate(
+    plot_date = as.Date(paste0("2022-", format(as.Date(periodFrom),"%m-%d"))),
+    plot_date = floor_date(plot_date, "1 week") + 2,
+    year = year(periodFrom),
+    value = value / 1000000
+    ) %>% 
+  filter(periodFrom < floor_date(Sys.Date(), "1 week")) %>% 
+  group_by(year, exporting_country, plot_date) %>%
+  summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>% 
+  filter(!is.na(exporting_country)) %>%
+  ggplot(aes(x = plot_date, y = value, colour = as.factor(year))) +
+  geom_line() +
+  gghighlight(year >= 2021, calculate_per_facet = T) +
+  facet_wrap(~exporting_country, scales = "free_y")
+
+```
+
+```{r}
+
+View(df_lng_import %>% 
+  filter(directionKey == "entry") %>%
+  mutate(id = gsub("(.{37})|kWh/d", "", id)) %>% 
+  distinct(pointLabel, id) %>% 
+  arrange(pointLabel))
+
+```
+
+
+## EU TARGETS
+```{r}
+
+last_data <- df_gas_storage %>% 
+  group_by(country) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  select(country, date = plot_date, target = full)
+
+gas_capacity <- df_gas_storage %>% 
+  group_by(country) %>% 
+  filter(gasDayStartedOn == max(gasDayStartedOn)) %>% 
+  distinct(country, workingGasVolume)
+
+gas_targets <- read_csv("data/eu-targets.csv") %>% 
+  gather("date","target",-c(country)) %>% 
+  mutate(
+    date = ymd(date),
+    target = as.numeric(gsub("%","",target)) / 100,
+    ) %>% 
+  bind_rows(last_data) %>% 
+  left_join(gas_capacity) %>% 
+  mutate(targetGasVolume = target * as.numeric(workingGasVolume))
+
+gas_targets
+
+```
+
+
+
+```{r}
+
+selected_countries <- c("EU","BE","DE")
+
+df_gas_storage %>% 
+  filter(country %in% selected_countries) %>% 
+  filter(plot_date >= "2021-03-01") %>%
+  ggplot(aes(x = plot_date, y = full)) +
+  geom_ribbon(aes(ymin = full_min, ymax = full_max), alpha = 0.1) +
+  geom_line(aes(y = full_avg), linetype = "11", colour = "darkgrey") +
+  geom_line(aes(colour = factor(year))) +
+  scale_colour_manual(values = c("darkgrey","black")) +
+  gghighlight(year >= 2021, use_direct_label = F, calculate_per_facet = T) +
+  geom_hline(yintercept = 0, size = 0) +
+  geom_line(data = subset(gas_targets, country %in% selected_countries),
+            aes(x = date, y = target), linetype = "11", colour = "red") +
+  geom_point(data = subset(gas_targets, country %in% selected_countries),
+            aes(x = date, y = target), colour = "red", size = 0.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_wrap(~country, scales = "free_y", ncol = 2) +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  labs(x = NULL, y = NULL, subtitle = "jaarlijks verloop vulgraad en target voor 2022")
+
+```
+
+
